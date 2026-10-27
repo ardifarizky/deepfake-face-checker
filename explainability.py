@@ -81,20 +81,30 @@ def occlusion_sensitivity(
         raise ValueError('Expected 224x224 model input')
 
     cell = 224 // grid_size
-    variants = [input_tensor]
-    for row in range(grid_size):
-        for col in range(grid_size):
-            masked = input_tensor.clone()
-            y1, y2 = row * cell, (row + 1) * cell
-            x1, x2 = col * cell, (col + 1) * cell
-            masked[..., y1:y2, x1:x2] = -IMAGENET_MEAN / IMAGENET_STD
-            variants.append(masked)
-    batch = torch.cat(variants, dim=0)
     with torch.inference_mode():
-        logits = model(batch)
-        probabilities = torch.softmax(logits.float(), dim=1)[:, class_index]
-    baseline = probabilities[0]
-    importance = baseline - probabilities[1:]
+        baseline = torch.softmax(model(input_tensor).float(), dim=1)[0, class_index]
+        importance_values = []
+        # Chunk masked variants to bound memory use on Streamlit Cloud.
+        chunk = []
+        def flush_chunk():
+            if not chunk:
+                return
+            batch = torch.cat(chunk, dim=0)
+            probabilities = torch.softmax(model(batch).float(), dim=1)[:, class_index]
+            importance_values.append(baseline - probabilities)
+            chunk.clear()
+
+        for row in range(grid_size):
+            for col in range(grid_size):
+                masked = input_tensor.clone()
+                y1, y2 = row * cell, (row + 1) * cell
+                x1, x2 = col * cell, (col + 1) * cell
+                masked[..., y1:y2, x1:x2] = -IMAGENET_MEAN / IMAGENET_STD
+                chunk.append(masked)
+                if len(chunk) == 64:
+                    flush_chunk()
+        flush_chunk()
+        importance = torch.cat(importance_values)
     # Positive values mean masking lowers the selected class score.
     importance = importance.reshape(grid_size, grid_size).unsqueeze(0).unsqueeze(0)
     importance = F.interpolate(importance, size=(224, 224), mode='bilinear', align_corners=False)
