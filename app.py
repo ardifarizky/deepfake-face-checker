@@ -52,4 +52,37 @@ def main():
  st.progress(fake,text=f'P(fake) = {fake:.1%}')
  st.write(f'P(real) = **{real:.1%}** · Inferensi CPU: **{elapsed:.0f} ms**')
 
+ st.divider()
+ st.subheader('Explainable AI')
+ st.caption('Visualisasi area yang memengaruhi skor kelas prediksi, bukan bukti kausal adanya artefak deepfake.')
+ methods=['Grad-CAM (khusus EfficientNet-B0)', 'Occlusion Sensitivity (semua model)'] if key=='efficientnet' else ['Occlusion Sensitivity (semua model)']
+ method=st.radio('Metode visualisasi', methods, horizontal=True)
+ grid=32
+ if method.startswith('Occlusion'):
+  grid=st.select_slider('Resolusi grid occlusion', options=[16,32,64], value=16, help='Grid lebih besar memberi detail lebih tinggi tetapi membutuhkan lebih banyak inferensi. 16 adalah yang tercepat.')
+ if st.button('Buat visualisasi penjelasan', use_container_width=True):
+  from explainability import gradcam_efficientnet, occlusion_sensitivity, heatmap_overlay, heatmap_image
+  try:
+   start_xai=time.perf_counter()
+   if method.startswith('Grad-CAM'):
+    if key!='efficientnet':
+     st.info('Grad-CAM pada aplikasi ini hanya tersedia untuk EfficientNet-B0. Pilih model tersebut atau gunakan Occlusion Sensitivity.')
+     st.stop()
+    x_grad=x.clone().requires_grad_(True)
+    with torch.enable_grad():
+     heatmap=gradcam_efficientnet(model,x_grad,int(probs.argmax().item()))
+    xai_label='Grad-CAM'
+   else:
+    heatmap=occlusion_sensitivity(model,x,int(probs.argmax().item()),grid_size=grid)
+    xai_label=f'Occlusion Sensitivity ({grid}×{grid})'
+   elapsed_xai=(time.perf_counter()-start_xai)*1000
+   col1,col2=st.columns(2)
+   with col1:
+    st.image(heatmap_image(heatmap),caption=f'{xai_label} — area sensitivitas',use_container_width=True)
+   with col2:
+    st.image(heatmap_overlay(face,heatmap),caption='Overlay pada gambar input',use_container_width=True)
+   st.caption(f'Kelas yang dijelaskan: {label} · Waktu: {elapsed_xai/1000:.1f} detik. Area hangat menunjukkan sensitivitas lebih tinggi terhadap skor kelas tersebut.')
+  except Exception as e:
+   st.error(f'Visualisasi gagal: {e}')
+
 if __name__=='__main__':main()
