@@ -1,0 +1,26 @@
+{
+  "hf_space_v2/efficientnet_best.pt": {
+    "bytes": 16319642,
+    "sha256": "e568508a4eb027ae948e56f7b2b29f666d0e258f599ecbcd34a333e1728da207",
+    "epoch": 2,
+    "best_auc": 0.9868943515082906
+  },
+  "deploy_github/efficientnet_best.pt": {
+    "bytes": 16319642,
+    "sha256": "e568508a4eb027ae948e56f7b2b29f666d0e258f599ecbcd34a333e1728da207",
+    "epoch": 2,
+    "best_auc": 0.9868943515082906
+  },
+  "hf_space_v2/swin_best.pt": {
+    "bytes": 55095098,
+    "sha256": "70241fae54621e24850f4fab8285275bdadd7210362fd3e5a88b176fb64d5135",
+    "epoch": 4,
+    "best_auc": 0.9841202226711118
+  },
+  "deploy_github/swin_best.pt": {
+    "bytes": 55095098,
+    "sha256": "70241fae54621e24850f4fab8285275bdadd7210362fd3e5a88b176fb64d5135",
+    "epoch": 4,
+    "best_auc": 0.9841202226711118
+  }
+}

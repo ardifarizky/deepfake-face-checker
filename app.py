@@ -17,14 +17,20 @@ APP = Path(__file__).resolve().parent
 MEAN = [.485, .456, .406]
 STD = [.229, .224, .225]
 MODEL_INFO = {
-    'EfficientNet-B0 (CNN)': ('efficientnet', 'efficientnet_b0.ra_in1k', 'efficientnet_v2_best.pt'),
-    'Swin-Tiny (Transformer)': ('swin', 'swin_tiny_patch4_window7_224.ms_in1k', 'swin_v2_best.pt'),
+    'EfficientNet-B0 (CNN)': ('efficientnet', 'efficientnet_b0.ra_in1k', 'efficientnet_best.pt'),
+    'Swin-Tiny (Transformer)': ('swin', 'swin_tiny_patch4_window7_224.ms_in1k', 'swin_best.pt'),
 }
 TRANSFORM = transforms.Compose([
     transforms.Resize((224, 224), interpolation=transforms.InterpolationMode.BILINEAR),
     transforms.ToTensor(),
     transforms.Normalize(MEAN, STD),
 ])
+
+
+def extract_state_dict(checkpoint):
+    """Support raw state dicts and notebook checkpoints containing model metadata."""
+    state = checkpoint.get('model', checkpoint) if isinstance(checkpoint, dict) else checkpoint
+    return {k: (v.float() if v.dtype in (torch.float16, torch.bfloat16) else v) for k, v in state.items()}
 
 
 @st.cache_resource
@@ -34,8 +40,7 @@ def load_model(timm_id, filename):
     if not path.exists():
         raise FileNotFoundError(f'Missing checkpoint: {filename}')
     model = timm.create_model(timm_id, pretrained=False, num_classes=2)
-    state = torch.load(path, map_location='cpu', weights_only=True)
-    state = {k: (v.float() if v.dtype == torch.float16 else v) for k, v in state.items()}
+    state = extract_state_dict(torch.load(path, map_location='cpu', weights_only=True))
     model.load_state_dict(state)
     model.eval()
     return model
@@ -115,8 +120,7 @@ def main():
     st.subheader('Explainable AI')
     st.caption('Visualisasi area yang memengaruhi skor kelas prediksi, bukan bukti kausal adanya artefak deepfake.')
 
-    methods = (['Grad-CAM (khusus EfficientNet-B0)', 'Occlusion Sensitivity (semua model)']
-               if model_key == 'efficientnet' else ['Occlusion Sensitivity (semua model)'])
+    methods = ['Grad-CAM', 'Occlusion Sensitivity (semua model)']
     method = st.radio('Metode visualisasi', methods, horizontal=True)
     grid = 16
     if method.startswith('Occlusion'):
@@ -127,7 +131,7 @@ def main():
 
     if st.button('Buat visualisasi penjelasan', width='stretch'):
         from explainability import (
-            gradcam_efficientnet, occlusion_sensitivity, heatmap_image, heatmap_overlay,
+            gradcam_efficientnet, gradcam_swin, occlusion_sensitivity, heatmap_image, heatmap_overlay,
         )
         try:
             start = time.perf_counter()
@@ -136,8 +140,9 @@ def main():
             x = current['tensor']
             class_index = current['class_index']
             if method.startswith('Grad-CAM'):
+                gradcam = gradcam_efficientnet if model_key == 'efficientnet' else gradcam_swin
                 with torch.enable_grad():
-                    heatmap = gradcam_efficientnet(model, x.clone().requires_grad_(True), class_index)
+                    heatmap = gradcam(model, x.clone().requires_grad_(True), class_index)
                 method_label = 'Grad-CAM'
             else:
                 heatmap = occlusion_sensitivity(model, x, class_index, grid_size=grid)

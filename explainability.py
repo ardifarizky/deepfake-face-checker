@@ -63,6 +63,37 @@ def gradcam_efficientnet(model, input_tensor: torch.Tensor, class_index: int) ->
         model.zero_grad(set_to_none=True)
 
 
+def gradcam_swin(model, input_tensor: torch.Tensor, class_index: int) -> np.ndarray:
+    """Grad-CAM for timm Swin using the final channel-last spatial block."""
+    activations = {}
+    gradients = {}
+
+    def forward_hook(_module, _inputs, output):
+        activations['value'] = output
+
+    def backward_hook(_module, _grad_input, grad_output):
+        gradients['value'] = grad_output[0]
+
+    target = model.layers[-1].blocks[-1]
+    forward_handle = target.register_forward_hook(forward_hook)
+    backward_handle = target.register_full_backward_hook(backward_hook)
+    try:
+        model.zero_grad(set_to_none=True)
+        output = model(input_tensor)
+        score = output[0, class_index]
+        score.backward()
+        features = activations['value'].permute(0, 3, 1, 2)
+        grads = gradients['value'].permute(0, 3, 1, 2)
+        weights = grads.mean(dim=(2, 3), keepdim=True)
+        cam = F.relu((weights * features).sum(dim=1, keepdim=True))
+        cam = F.interpolate(cam, size=input_tensor.shape[-2:], mode='bilinear', align_corners=False)
+        return normalize_heatmap(cam[0, 0])
+    finally:
+        forward_handle.remove()
+        backward_handle.remove()
+        model.zero_grad(set_to_none=True)
+
+
 def occlusion_sensitivity(
     model,
     input_tensor: torch.Tensor,
