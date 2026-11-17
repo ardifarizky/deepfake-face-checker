@@ -94,6 +94,60 @@ def gradcam_swin(model, input_tensor: torch.Tensor, class_index: int) -> np.ndar
         model.zero_grad(set_to_none=True)
 
 
+def robust_positive(values):
+    """Clip negative relevance and robustly scale positive values for display."""
+    positive = np.maximum(np.asarray(values, dtype=np.float32), 0.0)
+    scale = float(np.quantile(positive, 0.99))
+    return np.clip(positive / max(scale, 1e-12), 0.0, 1.0)
+
+
+def lime_map(model, image, seed=42, num_samples=384):
+    """Signed LIME surrogate weights for the fake class, matching the paper configuration."""
+    from lime.lime_image import LimeImageExplainer
+    from skimage.segmentation import slic
+
+    image = image.resize((224, 224), Image.Resampling.BILINEAR)
+
+    def predict_batch(images):
+        outputs = []
+        for start in range(0, len(images), 32):
+            batch = torch.from_numpy(images[start:start + 32]).permute(0, 3, 1, 2).float() / 255.0
+            mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)
+            std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
+            batch = (batch - mean) / std
+            with torch.no_grad():
+                fake = torch.softmax(model(batch).float(), dim=1)[:, 1].cpu().numpy()
+            outputs.extend(np.column_stack([1.0 - fake, fake]))
+        return np.asarray(outputs)
+
+    explainer = LimeImageExplainer()
+    explanation = explainer.explain_instance(
+        np.asarray(image), predict_batch, labels=(0, 1), top_labels=2,
+        hide_color=0, num_features=10, num_samples=num_samples, batch_size=32,
+        random_seed=seed,
+        segmentation_fn=lambda values: slic(
+            values, n_segments=50, compactness=10, sigma=1,
+            start_label=0, channel_axis=-1,
+        ),
+    )
+    result = np.zeros(explanation.segments.shape, dtype=np.float32)
+    for segment, weight in explanation.local_exp[1]:
+        result[explanation.segments == int(segment)] = float(weight)
+    return result
+
+
+def lrp_heatmap(model, input_tensor: torch.Tensor, class_index: int) -> np.ndarray:
+    """Positive LRP relevance from the separate ReLU-based AlexNet audit backbone."""
+    from captum.attr import LRP
+
+    with torch.enable_grad():
+        relevance = LRP(model).attribute(input_tensor, target=class_index)
+    signed = relevance.sum(dim=1)[0].detach().cpu().numpy()
+    if not np.isfinite(signed).all():
+        raise ValueError('LRP produced non-finite relevance values.')
+    return robust_positive(signed)
+
+
 def occlusion_sensitivity(
     model,
     input_tensor: torch.Tensor,

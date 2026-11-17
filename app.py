@@ -19,6 +19,7 @@ STD = [.229, .224, .225]
 MODEL_INFO = {
     'EfficientNet-B0 (CNN)': ('efficientnet', 'efficientnet_b0.ra_in1k', 'efficientnet_best.pt'),
     'Swin-Tiny (Transformer)': ('swin', 'swin_tiny_patch4_window7_224.ms_in1k', 'swin_best.pt'),
+    'AlexNet (LRP audit backbone)': ('alexnet', 'alexnet', 'alexnet_lrp_audit_int8.pt'),
 }
 TRANSFORM = transforms.Compose([
     transforms.Resize((224, 224), interpolation=transforms.InterpolationMode.BILINEAR),
@@ -33,12 +34,52 @@ def extract_state_dict(checkpoint):
     return {k: (v.float() if v.dtype in (torch.float16, torch.bfloat16) else v) for k, v in state.items()}
 
 
+def quantize_state_dict(state):
+    """Symmetric INT8 quantization per output channel; biases remain FP32."""
+    encoded = {}
+    for key, value in state.items():
+        if value.is_floating_point() and value.ndim >= 2:
+            flat = value.float().reshape(value.shape[0], -1)
+            maxima = flat.abs().amax(dim=1)
+            scale = torch.where(maxima > 0, maxima / 127.0, torch.ones_like(maxima))
+            qweight = torch.round(flat / scale[:, None]).clamp(-127, 127).to(torch.int8)
+            encoded[key] = {
+                'qweight': qweight.reshape(value.shape),
+                'scale': scale,
+                'shape': torch.tensor(value.shape, dtype=torch.int64),
+            }
+        else:
+            encoded[key] = value
+    return encoded
+
+
+def dequantize_state_dict(encoded):
+    state = {}
+    for key, value in encoded.items():
+        if isinstance(value, dict) and 'qweight' in value:
+            qweight = value['qweight']
+            shape = tuple(int(v) for v in value['shape'].tolist())
+            flat = qweight.float().reshape(shape[0], -1) * value['scale'].float()[:, None]
+            state[key] = flat.reshape(shape)
+        else:
+            state[key] = value
+    return state
+
+
 @st.cache_resource
 def load_model(timm_id, filename):
-    import timm
     path = APP / 'checkpoints' / filename
     if not path.exists():
         raise FileNotFoundError(f'Missing checkpoint: {filename}')
+    if timm_id == 'alexnet':
+        from torchvision.models import alexnet
+        model = alexnet(weights=None)
+        model.classifier[6] = torch.nn.Linear(4096, 2)
+        package = torch.load(path, map_location='cpu', weights_only=True)
+        model.load_state_dict(dequantize_state_dict(package['quantized_model']))
+        model.eval()
+        return model
+    import timm
     model = timm.create_model(timm_id, pretrained=False, num_classes=2)
     state = extract_state_dict(torch.load(path, map_location='cpu', weights_only=True))
     model.load_state_dict(state)
@@ -115,12 +156,19 @@ def main():
     st.subheader(f"Prediksi {prediction['choice']}: {prediction['label']}")
     st.progress(prediction['fake'], text=f"P(fake) = {prediction['fake']:.1%}")
     st.write(f"P(real) = **{prediction['real']:.1%}** · Inferensi CPU: **{prediction['elapsed_ms']:.0f} ms**")
+    if model_key == 'alexnet':
+        st.caption('AlexNet adalah backbone audit untuk LRP, bukan detector utama; performanya lebih rendah daripada EfficientNet.')
 
     st.divider()
     st.subheader('Explainable AI')
     st.caption('Visualisasi area yang memengaruhi skor kelas prediksi, bukan bukti kausal adanya artefak deepfake.')
 
-    methods = ['Grad-CAM', 'Occlusion Sensitivity (semua model)']
+    if model_key == 'efficientnet':
+        methods = ['Grad-CAM', 'LIME (kelas FAKE)', 'Occlusion Sensitivity']
+    elif model_key == 'swin':
+        methods = ['Grad-CAM', 'Occlusion Sensitivity']
+    else:
+        methods = ['LRP', 'Occlusion Sensitivity']
     method = st.radio('Metode visualisasi', methods, horizontal=True)
     grid = 16
     if method.startswith('Occlusion'):
@@ -131,7 +179,8 @@ def main():
 
     if st.button('Buat visualisasi penjelasan', width='stretch'):
         from explainability import (
-            gradcam_efficientnet, gradcam_swin, occlusion_sensitivity, heatmap_image, heatmap_overlay,
+            gradcam_efficientnet, gradcam_swin, lime_map, lrp_heatmap,
+            occlusion_sensitivity, robust_positive, heatmap_image, heatmap_overlay,
         )
         try:
             start = time.perf_counter()
@@ -144,16 +193,28 @@ def main():
                 with torch.enable_grad():
                     heatmap = gradcam(model, x.clone().requires_grad_(True), class_index)
                 method_label = 'Grad-CAM'
+                target_label = current['label']
+            elif method.startswith('LIME'):
+                heatmap = robust_positive(lime_map(
+                    model, current['image'], seed=int(input_id[:8], 16), num_samples=384,
+                ))
+                method_label = 'LIME (384 perturbations)'
+                target_label = 'FAKE'
+            elif method == 'LRP':
+                heatmap = lrp_heatmap(model, x, class_index)
+                method_label = 'LRP — AlexNet audit backbone'
+                target_label = current['label']
             else:
                 heatmap = occlusion_sensitivity(model, x, class_index, grid_size=grid)
                 method_label = f'Occlusion Sensitivity ({grid}×{grid})'
+                target_label = current['label']
             elapsed = time.perf_counter() - start
             st.session_state.explanation = {
                 'input_id': input_id,
                 'method_label': method_label,
                 'heatmap_png': heatmap_image(heatmap),
                 'overlay_png': heatmap_overlay(current['image'], heatmap),
-                'label': current['label'],
+                'label': target_label,
                 'elapsed_s': elapsed,
             }
         except Exception as exc:

@@ -22,5 +22,17 @@
     "sha256": "70241fae54621e24850f4fab8285275bdadd7210362fd3e5a88b176fb64d5135",
     "epoch": 4,
     "best_auc": 0.9841202226711118
+  },
+  "hf_space_v2/alexnet_lrp_audit_int8.pt": {
+    "bytes": 57087698,
+    "sha256": "c87d44ea165994f6cfd7ab9c327d6ea40fcde5c4511a86b8db8b7d25fdab02c0",
+    "epoch": 5,
+    "best_auc": 0.7735839539591807
+  },
+  "deploy_github/alexnet_lrp_audit_int8.pt": {
+    "bytes": 57087698,
+    "sha256": "c87d44ea165994f6cfd7ab9c327d6ea40fcde5c4511a86b8db8b7d25fdab02c0",
+    "epoch": 5,
+    "best_auc": 0.7735839539591807
   }
 }
