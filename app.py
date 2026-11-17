@@ -8,10 +8,17 @@ import io
 import time
 from pathlib import Path
 
+import streamlit as st
+
+if st.query_params.get('health') == '1':
+    st.set_page_config(page_title='Deployment Health Check')
+    st.title('Deployment health check')
+    st.success('The Streamlit Python process started successfully.')
+    st.stop()
+
 import torch
 from PIL import Image, ImageOps
 from torchvision import transforms
-import streamlit as st
 
 APP = Path(__file__).resolve().parent
 MEAN = [.485, .456, .406]
